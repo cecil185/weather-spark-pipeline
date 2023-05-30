@@ -29,7 +29,8 @@ def spark_pipeline():
             f"from collisions "
             f"where collision_date <= date('{end_date}') "
             f"and collision_date >= date('{start_date}') "
-            f"limit 50")
+            # f"limit 50"
+            )
         pandas_df = pd.read_sql_query(query, con)
         pandas_df.fillna(np.nan, inplace=True)
         print(f"Before dropping: {len(pandas_df)} rows")
@@ -41,6 +42,10 @@ def spark_pipeline():
     df_accident = spark.createDataFrame(pandas_df)
     print(f"Conversion to Spark DataFrame time: {time.time() - start_time} seconds")
 
+    df_accident = df_accident.filter((F.hour(df_accident['collision_time']) >= 7) & 
+                    (F.hour(df_accident['collision_time']) <= 16))
+    print(f"After filtering accidents to daytime: {df_accident.count()} rows")
+    
     df_accident = df_accident.withColumn("collision_date", F.to_date(F.col("collision_date")))
     df_accident = df_accident.withColumn('longitude_rounded', F.round(df_accident['longitude'], 0)) \
                          .withColumn('latitude_rounded', F.round(df_accident['latitude'], 0))
@@ -115,7 +120,10 @@ def spark_pipeline():
 
         print(f"Total number of rows: {df_weather.count()}")
 
-        
+    df_weather = df_weather.filter((F.hour(df_weather['weather_timestamp']) >= 7) & 
+                    (F.hour(df_weather['weather_timestamp']) <= 16))
+    print(f"After filtering weather to daytime: {df_weather.count()} rows")
+    
     # Read the JSON file
     with open('weather_categories.json', 'r') as file:
         weather_categories = json.load(file)
@@ -186,6 +194,6 @@ def spark_pipeline():
     print(f"Degrees of freedom: {dof}")
     # print(f"Expected counts: \n{expected}")
 
-    
+
 if __name__ == "__main__":
     spark_pipeline()
