@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "twitter-weather-spark-pipeline"
+version = "0.1.0"
+description = ""
+authors = ["Cecil <cecil.ash@karbonhq.com>"]
+readme = "README.md"
+packages = [{include = "twitter_weather_spark_pipeline"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+pyspark = "^3.4.0"
+requests = "^2.31.0"
+pandas = "^2.0.1"
+python-twitter = "^3.5"
+tweepy = "^4.14.0"
+python-dotenv = "^1.0.0"
+matplotlib = "^3.7.1"
+ipykernel = "^6.23.1"
+scipy = "^1.10.1"
+statsmodels = "^0.14.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
