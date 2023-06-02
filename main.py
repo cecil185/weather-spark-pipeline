@@ -23,7 +23,7 @@ def spark_pipeline():
     sc.setLogLevel("ERROR")
     print(f"SparkSession creation time: {time.time() - start_time} seconds")
 
-    with sqlite3.connect("/Users/cash/code/personal/twitter-weather-spark-pipeline/data/switrs.sqlite") as con:
+    with sqlite3.connect("/Users/cash/code/personal/weather-spark-pipeline/data/switrs.sqlite") as con:
         query = (f"select case_id, collision_date, collision_time, collision_severity, alcohol_involved, latitude, longitude "
             # f"type_of_collision, road_surface, killed_victims, injured_victims, party_count, intersection "
             f"from collisions "
@@ -31,20 +31,21 @@ def spark_pipeline():
             f"and collision_date >= date('{start_date}') "
             # f"limit 50"
             )
+        # df = spark.read.format("jdbc").option("url", "jdbc:sqlite:/Users/cash/code/personal/weather-spark-pipeline/data/switrs.sqlite").option("dbtable", "collisions").option("user", "root").option("password", "").load()
+        # print(f"Spark Dataframe Length: {df.count()} rows")
         pandas_df = pd.read_sql_query(query, con)
-        pandas_df.fillna(np.nan, inplace=True)
-        print(f"Before dropping: {len(pandas_df)} rows")
-        pandas_df = pandas_df.dropna(subset=['longitude', 'latitude'])
-        print(f"After dropping: {len(pandas_df)} rows")
-        pandas_df.to_csv('/Users/cash/code/personal/twitter-weather-spark-pipeline/data/output.csv', index=False)
 
     start_time = time.time()
     df_accident = spark.createDataFrame(pandas_df)
     print(f"Conversion to Spark DataFrame time: {time.time() - start_time} seconds")
 
+    # Drop records where longitude or latitude are null
+    df_accident = df_accident.na.fill(np.nan)
+    df_accident = df_accident.na.drop(subset=["longitude", "latitude"])
+
     df_accident = df_accident.filter((F.hour(df_accident['collision_time']) >= 7) & 
                     (F.hour(df_accident['collision_time']) <= 16))
-    print(f"After filtering accidents to daytime: {df_accident.count()} rows")
+    # print(f"After filtering accidents to daytime: {df_accident.count()} rows")
     
     df_accident = df_accident.withColumn("collision_date", F.to_date(F.col("collision_date")))
     df_accident = df_accident.withColumn('longitude_rounded', F.round(df_accident['longitude'], 0)) \
@@ -118,11 +119,11 @@ def spark_pipeline():
         
         df_weather = df_weather.union(df_temp)
 
-        print(f"Total number of rows: {df_weather.count()}")
+        # print(f"Total number of rows: {df_weather.count()}")
 
     df_weather = df_weather.filter((F.hour(df_weather['weather_timestamp']) >= 7) & 
                     (F.hour(df_weather['weather_timestamp']) <= 16))
-    print(f"After filtering weather to daytime: {df_weather.count()} rows")
+    # print(f"After filtering weather to daytime: {df_weather.count()} rows")
     
     # Read the JSON file
     with open('weather_categories.json', 'r') as file:
@@ -147,7 +148,7 @@ def spark_pipeline():
     # Filter rows where weather_category is not equal to "other"
     df_weather = df_weather.filter(F.col("weather_category") != "other")
 
-    df_weather.write.mode("overwrite").csv("/Users/cash/code/personal/twitter-weather-spark-pipeline/data/weather.csv")
+    # df_weather.write.mode("overwrite").csv("/Users/cash/code/personal/weather-spark-pipeline/data/weather.csv")
 
     # Left join the df_weather onto df_accident
     df_accident = df_accident.join(df_weather, 
@@ -156,15 +157,15 @@ def spark_pipeline():
             df_accident["latitude_rounded"] == df_weather["weather_latitude"]], 
         how='left')
     
-    df_accident.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/twitter-weather-spark-pipeline/data/accident.csv")
+    # df_accident.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/accident.csv")
   
     #STATISTICAL ANALYSIS
     df_accident_count = df_accident.groupBy("collision_timestamp", "longitude_rounded", "latitude_rounded", "weather_category").count()
-    df_accident_count = df_accident_count.groupBy("weather_category").count()
-    df_accident_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/twitter-weather-spark-pipeline/data/accident_count.csv")
+    df_accident_count = df_accident_count.groupBy("weather_category").count()``
+    # df_accident_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/accident_count.csv")
 
     df_weather_count = df_weather.groupBy("weather_category").count()
-    df_weather_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/twitter-weather-spark-pipeline/data/weather_count.csv")
+    # df_weather_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/weather_count.csv")
 
 
     #CREATE TABLE
@@ -187,12 +188,11 @@ def spark_pipeline():
 
     print(contingency_table)
 
-    chi2, p, dof, expected = chi2_contingency(contingency_table)
+    chi2, p, dof, expected_counts = chi2_contingency(contingency_table)
 
     print(f"Chi2 value: {chi2}")
     print(f"P-value: {p}")
     print(f"Degrees of freedom: {dof}")
-    # print(f"Expected counts: \n{expected}")
 
 
 if __name__ == "__main__":
