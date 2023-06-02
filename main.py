@@ -11,6 +11,14 @@ from scipy.stats import chi2_contingency
 
 class SparkPipeline:
     def __init__(self, start_date='2019-01-21', end_date='2019-12-31'):
+        """
+        Initialize the SparkPipeline object.
+        
+        Args:
+            start_date (str): Start date in the format 'YYYY-MM-DD'.
+            end_date (str): End date in the format 'YYYY-MM-DD'.
+        """
+
         self.start_date = start_date
         self.end_date = end_date
         self.spark = SparkSession.builder.appName("WeatherPipeline").master("local[1]").getOrCreate()
@@ -23,6 +31,13 @@ class SparkPipeline:
         ])
 
     def get_accident_data(self):
+        """
+        Connect to the SQLite database, execute a SQL query, convert the results into a pandas DataFrame, and then convert that into a Spark DataFrame.
+        
+        Returns:
+            DataFrame: Accident data.
+        """
+        
         with sqlite3.connect("/Users/cash/code/personal/weather-spark-pipeline/data/switrs.sqlite") as con:
             query = (f"select case_id, collision_date, collision_time, collision_severity, alcohol_involved, latitude, longitude "
                 f"from collisions "
@@ -34,6 +49,16 @@ class SparkPipeline:
         return df_accident
 
     def process_accident_data(self, df_accident):
+        """
+        Process the accident data by cleaning, transforming and creating new features.
+        
+        Args:
+            df_accident (DataFrame): DataFrame containing accident data.
+        
+        Returns:
+            DataFrame: Processed accident data.
+        """
+        
         df_accident = df_accident.na.fill(np.nan)
         df_accident = df_accident.na.drop(subset=["longitude", "latitude"])
 
@@ -73,6 +98,16 @@ class SparkPipeline:
         return df_accident
 
     def get_weather_data(self, unique_coords):
+        """
+        Fetch weather data from the Open-Meteo API for each unique set of coordinates.
+        
+        Args:
+            unique_coords (DataFrame): DataFrame containing unique sets of rounded latitude and longitude coordinates.
+        
+        Returns:
+            DataFrame: Weather data for the unique sets of coordinates.
+        """
+        
         df_weather = self.spark.createDataFrame([], self.weather_schema)
         for row in unique_coords.collect():
             # Create an empty temporary DataFrame
@@ -104,6 +139,16 @@ class SparkPipeline:
         return df_weather
 
     def process_weather_data(self, df_weather):
+        """
+        Process the weather data by cleaning, transforming and creating new features.
+        
+        Args:
+            df_weather (DataFrame): DataFrame containing weather data.
+        
+        Returns:
+            DataFrame: Processed weather data.
+        """
+        
         df_weather = df_weather.filter((F.hour(df_weather['weather_timestamp']) >= 7) & 
                     (F.hour(df_weather['weather_timestamp']) <= 16))
         
@@ -133,6 +178,17 @@ class SparkPipeline:
         return df_weather
 
     def join_accident_and_weather_data(self, df_accident, df_weather):
+        """
+        Join the accident and weather data based on the timestamp and coordinates.
+        
+        Args:
+            df_accident (DataFrame): DataFrame containing processed accident data.
+            df_weather (DataFrame): DataFrame containing processed weather data.
+        
+        Returns:
+            DataFrame: DataFrame resulting from left join of df_accident and df_weather.
+        """
+        
         df_accident = df_accident.join(df_weather, 
             on=[df_accident["collision_timestamp"] == df_weather["weather_timestamp"], 
                 df_accident["longitude_rounded"] == df_weather["weather_longitude"], 
@@ -141,6 +197,17 @@ class SparkPipeline:
         return df_accident
 
     def statistical_analysis(self, df_accident, df_weather):
+        """
+        Conduct statistical analysis on the joined data to evaluate the relationship between weather conditions and accidents. 
+        
+        Args:
+            df_accident (DataFrame): DataFrame containing processed and joined accident data.
+            df_weather (DataFrame): DataFrame containing processed weather data.
+        
+        Returns:
+            None: Prints the chi-square test results.
+        """
+        
         df_accident_count = df_accident.groupBy("collision_timestamp", "longitude_rounded", "latitude_rounded", "weather_category").count()
         df_accident_count = df_accident_count.groupBy("weather_category").count()
         # df_accident_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/accident_count.csv")
@@ -175,6 +242,13 @@ class SparkPipeline:
         print(f"Degrees of freedom: {dof}")
 
     def execute_pipeline(self):
+        """
+        Execute the data processing pipeline from start to end.
+        
+        Returns:
+            None
+        """
+        
         start_time = time.time()
         df_accident = self.get_accident_data()
         print(f"Fetching accident data time: {time.time() - start_time} seconds")
