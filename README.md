@@ -31,7 +31,8 @@ The hypothesis of this experiment is that weather conditions have no impact on t
 
 A SaaS analogy for this experiment design would the event of interest is churn or expansion instead of a car accident and customers are grouped by different UI's instead of different weather conditions. A Chi-Square test rejected the hypothesis, indicating that weather conditions do impact likelihood of car accidents. Then, I visualized accident rates by weather category with 95% confidence intervals.
 
-![Figure_1](https://github.com/cecil185/weather-spark-pipeline/assets/57224090/7afd47f1-51ee-46cb-ac71-e2684435ec7d)
+![Figure_1](Figure_1.png)
+![Figure_1](https://github.com/cecil185/weather-spark-pipeline/assets/57224090/d7455462-be63-40d8-ba80-38681d77cb1f)
 
 As expected, an accident is more likely to occur during heavy rain than during light rain and both are more likely to occur than during clear weather. Surprisingly, the accident rates were lower during light and heavy snow. One potential reason for this is that people avoid driving when it is snowing, so fewer cars on the road result in fewer accidents.
 
