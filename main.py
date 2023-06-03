@@ -7,10 +7,13 @@ import pandas as pd
 import numpy as np
 import requests
 import json
+import scipy.stats as stats
 from scipy.stats import chi2_contingency
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 class SparkPipeline:
-    def __init__(self, start_date='2019-01-21', end_date='2019-12-31'):
+    def __init__(self, start_date, end_date):
         """
         Initialize the SparkPipeline object.
         
@@ -21,7 +24,13 @@ class SparkPipeline:
 
         self.start_date = start_date
         self.end_date = end_date
-        self.spark = SparkSession.builder.appName("WeatherPipeline").master("local[1]").getOrCreate()
+        self.contingency_table_path = 'data/contingency_table.csv'
+        # self.spark = SparkSession.builder.appName("WeatherPipeline").master("local[*]").getOrCreate()
+        self.spark = SparkSession.builder \
+            .appName("WeatherPipeline") \
+            .master("local[*]") \
+            .config("spark.driver.extraClassPath", "sqlite-jdbc-3.42.0.0.jar") \
+            .getOrCreate()
         self.spark.sparkContext.setLogLevel("ERROR")
         self.weather_schema = StructType([
             StructField("weather_timestamp", TimestampType()),
@@ -38,15 +47,19 @@ class SparkPipeline:
             DataFrame: Accident data.
         """
         
-        with sqlite3.connect("/Users/cash/code/personal/weather-spark-pipeline/data/switrs.sqlite") as con:
-            query = (f"select case_id, collision_date, collision_time, collision_severity, alcohol_involved, latitude, longitude "
+        query = (f"select collision_date, collision_time, latitude, longitude "
+                # f", case_id, collision_severity, alcohol_involved "
                 f"from collisions "
                 f"where collision_date <= date('{self.end_date}') "
                 f"and collision_date >= date('{self.start_date}') "
-                f"limit 50")
-            pandas_df = pd.read_sql_query(query, con)
-        df_accident = self.spark.createDataFrame(pandas_df)
-        return df_accident
+                )
+
+        df = self.spark.read.format("jdbc")\
+            .option("url", "jdbc:sqlite:/Users/cash/code/personal/weather-spark-pipeline/data/switrs.sqlite")\
+            .option("query", query)\
+            .load()
+    
+        return df
 
     def process_accident_data(self, df_accident):
         """
@@ -58,21 +71,21 @@ class SparkPipeline:
         Returns:
             DataFrame: Processed accident data.
         """
-        
+
         df_accident = df_accident.na.fill(np.nan)
+
         df_accident = df_accident.na.drop(subset=["longitude", "latitude"])
 
+        # Limit data to accidents occuring between 7:00 and 16:00 to avoid influence of night time driving.
         df_accident = df_accident.filter((F.hour(df_accident['collision_time']) >= 7) & 
                         (F.hour(df_accident['collision_time']) <= 16))
-        
+
+        # Convert to datetime
         df_accident = df_accident.withColumn("collision_date", F.to_date(F.col("collision_date")))
+
+        # Round longitude and latitude to 0 decimal places
         df_accident = df_accident.withColumn('longitude_rounded', F.round(df_accident['longitude'], 0)) \
                             .withColumn('latitude_rounded', F.round(df_accident['latitude'], 0))
-
-        min_date = df_accident.agg(F.min("collision_date")).collect()[0][0]
-        max_date = df_accident.agg(F.max("collision_date")).collect()[0][0]
-        print("Min date:", min_date)
-        print("Max date:", max_date)
 
         ## TIMESTAMP CONVERSIONS
 
@@ -127,10 +140,9 @@ class SparkPipeline:
                 continue
 
             data = zip(time_list, weathercode_list)
-            rdd = self.spark.sparkContext.parallelize(data)
-
+            
             # Create the DataFrame
-            df_temp = self.spark.createDataFrame(rdd, ["weather_timestamp", "weather_code"])
+            df_temp = self.spark.createDataFrame(data, ["weather_timestamp", "weather_code"])
             df_temp = df_temp.withColumn("weather_longitude", F.lit(weather_longitude)).withColumn("weather_latitude", F.lit(weather_latitude))
             
             df_weather = df_weather.union(df_temp)
@@ -196,50 +208,53 @@ class SparkPipeline:
             how='left')
         return df_accident
 
-    def statistical_analysis(self, df_accident, df_weather):
+    def create_contingency_table(self, df_accident, df_weather):
         """
-        Conduct statistical analysis on the joined data to evaluate the relationship between weather conditions and accidents. 
+        Tranform df_accident and df_weather to count occurences of each event type, creating a contingency table.
         
         Args:
             df_accident (DataFrame): DataFrame containing processed and joined accident data.
             df_weather (DataFrame): DataFrame containing processed weather data.
         
         Returns:
-            None: Prints the chi-square test results.
+            None: Writes a contingency table for statistical analysis to a CSV file.
         """
         
-        df_accident_count = df_accident.groupBy("collision_timestamp", "longitude_rounded", "latitude_rounded", "weather_category").count()
-        df_accident_count = df_accident_count.groupBy("weather_category").count()
-        # df_accident_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/accident_count.csv")
+        df_accident = df_accident.groupBy("collision_timestamp", "longitude_rounded", "latitude_rounded", "weather_category").count()
+        df_accident = df_accident.groupBy("weather_category").count()
+        # df_accident.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/accident_count.csv")
 
-        df_weather_count = df_weather.groupBy("weather_category").count()
-        # df_weather_count.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/weather_count.csv")
+        df_weather = df_weather.groupBy("weather_category").count()
+        # df_weather.write.mode("overwrite").option("header", "true").csv("/Users/cash/code/personal/weather-spark-pipeline/data/weather_count.csv")
 
         #CREATE TABLE
         # Convert Spark DataFrames to pandas DataFrames
-        df_accident_count_pandas = df_accident_count.toPandas()
-        df_weather_count_pandas = df_weather_count.toPandas()
+        df_accident_pandas = df_accident.toPandas()
+        df_weather_pandas = df_weather.toPandas()
 
         # Rename the count columns for clarity
-        df_accident_count_pandas.rename(columns={'count': 'accident_count'}, inplace=True)
-        df_weather_count_pandas.rename(columns={'count': 'weather_count'}, inplace=True)
+        df_accident_pandas.rename(columns={'count': 'accident_count'}, inplace=True)
+        df_weather_pandas.rename(columns={'count': 'weather_count'}, inplace=True)
 
         # Merge the two DataFrames on weather_category
-        merged_df = pd.merge(df_weather_count_pandas, df_accident_count_pandas, on='weather_category')
+        merged_df = pd.merge(df_weather_pandas, df_accident_pandas, on='weather_category')
         print(merged_df)
         # Calculate the counts of times when an accident did not occur
         merged_df['no_accident_count'] = merged_df['weather_count'] - merged_df['accident_count']
         print(merged_df)
-        # Create the contingency table
-        contingency_table = merged_df[['accident_count', 'no_accident_count']].T.values
 
-        print(contingency_table)
+        merged_df.to_csv(self.contingency_table_path)
 
-        chi2, p, dof, expected_counts = chi2_contingency(contingency_table)
+    def get_contingency_table(self):
+        """
+        Returns the contingency table as a pandas dataframe.
+        """
+        try:
+            return pd.read_csv(self.contingency_table_path)
+        except FileNotFoundError as e:
+            print(f"Contingency table not found: {e}")
+            return None
 
-        print(f"Chi2 value: {chi2}")
-        print(f"P-value: {p}")
-        print(f"Degrees of freedom: {dof}")
 
     def execute_pipeline(self):
         """
@@ -252,6 +267,7 @@ class SparkPipeline:
         start_time = time.time()
         df_accident = self.get_accident_data()
         print(f"Fetching accident data time: {time.time() - start_time} seconds")
+        print(f"Accident dataset row count {df_accident.count()}")
 
         start_time = time.time()
         df_accident = self.process_accident_data(df_accident)
@@ -261,6 +277,7 @@ class SparkPipeline:
         unique_coords = df_accident.select("latitude_rounded", "longitude_rounded").distinct()
         df_weather = self.get_weather_data(unique_coords)
         print(f"Fetching weather data time: {time.time() - start_time} seconds")
+        print(f"Weather dataset row count {df_weather.count()}")
 
         start_time = time.time()
         df_weather = self.process_weather_data(df_weather)
@@ -270,10 +287,38 @@ class SparkPipeline:
         df_accident = self.join_accident_and_weather_data(df_accident, df_weather)
         print(f"Joining data time: {time.time() - start_time} seconds")
 
-        start_time = time.time()
-        self.statistical_analysis(df_accident, df_weather)
-        print(f"Statistical analysis time: {time.time() - start_time} seconds")
+        self.create_contingency_table(df_accident, df_weather)
 
 if __name__ == "__main__":
-    pipeline = SparkPipeline()
-    pipeline.execute_pipeline()
+    weather_pipeline = SparkPipeline(start_date='2010-01-01', end_date='2019-12-31')
+    
+    weather_pipeline.execute_pipeline()
+    
+    # STATISTICAL ANALYSIS
+    contingency_table = weather_pipeline.get_contingency_table()
+    contingency_values = contingency_table[['accident_count', 'no_accident_count']].T.values
+    chi2, p, dof, expected_counts = chi2_contingency(contingency_values)
+
+    print(f"Chi2 value: {chi2}")
+    print(f"P-value: {p}")
+    print(f"Degrees of freedom: {dof}")
+
+    # Adding a new column for proportions of accidents
+    contingency_table['accident_rate'] = contingency_table['accident_count'] / contingency_table['weather_count']
+    print(contingency_table)
+
+    # PLOTTING CONFIDENCE INTERVALS
+
+    # Compute the standard errors
+    contingency_table['standard_error'] = np.sqrt((contingency_table['accident_rate'] * (1 - contingency_table['accident_rate'])) / contingency_table['weather_count'])
+    
+    # Compute the 95% confidence intervals
+    contingency_table['ci_low'], contingency_table['ci_high'] = stats.norm.interval(0.95, loc=contingency_table['accident_rate'], scale=contingency_table['standard_error'])
+
+    # Plotting
+    plt.figure(figsize=(10,6))
+    sns.pointplot(x='weather_category', y='accident_rate', data=contingency_table, join=False, capsize=0.2)
+    plt.errorbar(contingency_table['weather_category'], contingency_table['accident_rate'], 
+                yerr=contingency_table['standard_error'], fmt='o', capsize=5)
+    plt.title('Proportion of Accidents by Weather Category with 95% Confidence Intervals')
+    plt.show()
